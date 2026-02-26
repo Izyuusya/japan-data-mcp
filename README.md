@@ -1,5 +1,7 @@
 # japan-data-mcp
 
+<!-- mcp-name: io.github.Izyuusya/japan-data-mcp -->
+
 日本の地域分析・比較に特化した MCP（Model Context Protocol）サーバーです。
 
 [e-Stat（政府統計の総合窓口）](https://www.e-stat.go.jp/)、

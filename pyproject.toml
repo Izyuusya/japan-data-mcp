@@ -1,6 +1,6 @@
 [project]
 name = "japan-data-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "日本の公的データ（統計・法人・不動産）にAIからアクセスするMCPサーバー"
 readme = "README.md"
 authors = [
