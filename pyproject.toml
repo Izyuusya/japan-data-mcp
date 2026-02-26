@@ -1,0 +1,44 @@
+[project]
+name = "japan-data-mcp"
+version = "0.1.0"
+description = "日本の公的データ（統計・法人・不動産）にAIからアクセスするMCPサーバー"
+readme = "README.md"
+authors = [
+    { name = "Izyuusya", email = "ka308909@outlook.jp" }
+]
+requires-python = ">=3.13"
+license = "MIT"
+keywords = ["mcp", "japan", "statistics", "e-stat", "estat", "government-data"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp>=1.26.0",
+    "pydantic>=2.12.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/Izyuusya/japan-data-mcp"
+Repository = "https://github.com/Izyuusya/japan-data-mcp"
+Issues = "https://github.com/Izyuusya/japan-data-mcp/issues"
+
+[project.scripts]
+japan-data-mcp = "japan_data_mcp.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.6,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
