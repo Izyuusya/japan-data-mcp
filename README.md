@@ -9,6 +9,12 @@
 [国土交通省 不動産情報ライブラリ](https://www.reinfolib.mlit.go.jp/) の API を通じて
 日本の公的データにアクセスし、人間が読みやすい形式に自動変換して返します。
 
+<p align="center">
+  <img src="docs/demo-chat.gif" alt="japan-data-mcp デモ: Claude Desktopで「札幌市の人口を教えて」と聞くと、出典付きデータが返る" width="700">
+</p>
+
+> **解説記事**: [e-Stat APIを100回叩いてわかった、政府データが宝の持ち腐れな件｜DATA POPCORN](https://datapopcorn.jp/estat-api-japan-data-mcp/)
+
 ## 特徴
 
 - **コード自動変換** — e-Stat が返すコード番号（`13000` → `東京都`）を名称に自動変換
@@ -148,7 +154,7 @@ japan-data-mcp
 ### 地域の人口データを取得する
 
 ```
-get_population("水戸市")
+get_population("札幌市")
 ```
 
 ### 複数地域を比較する
@@ -156,7 +162,7 @@ get_population("水戸市")
 ```
 compare_regions(
     stats_data_id="0003433219",
-    areas=["水戸市", "宇都宮市", "前橋市"]
+    areas=["札幌市", "仙台市", "福岡市"]
 )
 ```
 
@@ -169,7 +175,7 @@ search_corporations("トヨタ", area="愛知県")
 ### 不動産取引価格を調べる
 
 ```
-get_real_estate_transactions("水戸市", year=2023)
+get_real_estate_transactions("札幌市", year=2023)
 ```
 
 ### 地域の総合プロファイルを取得する

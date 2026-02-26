@@ -16,3 +16,4 @@ wheels/
 
 # Claude Code
 .claude/
+tests/e2e_output.txt
