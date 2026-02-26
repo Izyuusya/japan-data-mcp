@@ -1,0 +1,27 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+
+startCommand:
+  type: stdio
+
+configSchema:
+  type: object
+  required:
+    - estatAppId
+  properties:
+    estatAppId:
+      type: string
+      description: "e-Stat API Application ID (required). Get it free at https://www.e-stat.go.jp/api/api-info/api-guide"
+    corpAppId:
+      type: string
+      description: "Corporate Number Web-API Application ID (optional). Apply at https://www.houjin-bangou.nta.go.jp/webapi/"
+    realestateApiKey:
+      type: string
+      description: "Real Estate Information Library API Key (optional). Apply at https://www.reinfolib.mlit.go.jp/api/request/"
+
+commandFunction: |-
+  config => {
+    const env = { ESTAT_APP_ID: config.estatAppId };
+    if (config.corpAppId) env.CORP_APP_ID = config.corpAppId;
+    if (config.realestateApiKey) env.REALESTATE_API_KEY = config.realestateApiKey;
+    return { command: 'japan-data-mcp', args: [], env };
+  }
