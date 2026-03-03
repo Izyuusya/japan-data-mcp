@@ -6,7 +6,8 @@
 
 [e-Stat（政府統計の総合窓口）](https://www.e-stat.go.jp/)、
 [国税庁 法人番号公表サイト](https://www.houjin-bangou.nta.go.jp/)、
-[国土交通省 不動産情報ライブラリ](https://www.reinfolib.mlit.go.jp/) の API を通じて
+[国土交通省 不動産情報ライブラリ](https://www.reinfolib.mlit.go.jp/)、
+[適格請求書発行事業者公表サイト](https://www.invoice-kohyo.nta.go.jp/) の API を通じて
 日本の公的データにアクセスし、人間が読みやすい形式に自動変換して返します。
 
 <p align="center">
@@ -22,6 +23,7 @@
 - **地域比較** — 複数地域のデータをピボットテーブルで並べて比較
 - **プリセット分析** — 統計表 ID を知らなくても、地域名だけで人口データや地域プロファイルを取得
 - **法人検索** — 法人名から企業の法人番号・所在地・種別を検索
+- **インボイス確認** — 会社名からインボイス登録番号を検索、登録状況・有効性を確認
 - **不動産取引価格** — 地域の不動産取引データと価格サマリーを取得
 - **データ検証** — 全ての出力にデータ出典・検証リンク・取得日時を付与
 
@@ -46,6 +48,14 @@
 | --- | --- |
 | `search_corporations` | 法人名で企業を検索（地域・種別で絞り込み可） |
 | `get_corporation` | 法人番号から企業の詳細情報を取得 |
+
+### インボイス（適格請求書発行事業者公表 Web-API）
+
+| ツール名 | 説明 |
+| --- | --- |
+| `search_invoice_by_name` | 会社名からインボイス登録番号を検索（法人のみ） |
+| `check_invoice_registration` | 登録番号（T+13桁）でインボイス登録状況を確認 |
+| `validate_invoice_on_date` | 指定日時点でのインボイス登録有効性を確認 |
 
 ### 不動産取引（不動産情報ライブラリ API）
 
@@ -90,6 +100,7 @@ japan-data-mcp setup
 
 - **e-Stat API は必須** です。未設定の場合サーバーが起動しません。
 - 法人番号・不動産 API は任意です。未設定でも他の機能は正常に動作します。
+- `CORP_APP_ID` はインボイスAPIでも共用されます（追加キー不要）。
 - 全て **無料** で取得できます。
 
 #### 手動設定する場合
@@ -172,6 +183,12 @@ compare_regions(
 search_corporations("トヨタ", area="愛知県")
 ```
 
+### インボイス登録を確認する
+
+```
+search_invoice_by_name("トヨタ自動車", area="愛知県")
+```
+
 ### 不動産取引価格を調べる
 
 ```
@@ -205,6 +222,7 @@ uv run japan-data-mcp
 
 - [e-Stat（政府統計の総合窓口）](https://www.e-stat.go.jp/) — 統計データは [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja) で提供
 - [国税庁 法人番号公表サイト Web-API](https://www.houjin-bangou.nta.go.jp/webapi/) — 法人番号・法人情報
+- [国税庁 適格請求書発行事業者公表サイト Web-API](https://www.invoice-kohyo.nta.go.jp/web-api/) — インボイス登録情報
 - [国土交通省 不動産情報ライブラリ](https://www.reinfolib.mlit.go.jp/) — 不動産取引価格情報
 
 > このサービスは各 API 提供元のデータを利用していますが、サービスの内容は各機関によって保証されたものではありません。

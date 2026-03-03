@@ -1,14 +1,14 @@
 [project]
 name = "japan-data-mcp"
-version = "0.1.1"
-description = "日本の公的データ（統計・法人・不動産）にAIからアクセスするMCPサーバー"
+version = "0.2.0"
+description = "日本の公的データ（統計・法人・不動産・インボイス）にAIからアクセスするMCPサーバー"
 readme = "README.md"
 authors = [
     { name = "Izyuusya", email = "ka308909@outlook.jp" }
 ]
 requires-python = ">=3.13"
 license = "MIT"
-keywords = ["mcp", "japan", "statistics", "e-stat", "estat", "government-data"]
+keywords = ["mcp", "japan", "statistics", "e-stat", "estat", "government-data", "invoice"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
