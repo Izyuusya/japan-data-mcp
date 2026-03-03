@@ -17,6 +17,8 @@ from mcp.server.fastmcp import Context, FastMCP
 from japan_data_mcp.corp.client import CorpClient
 from japan_data_mcp.corp.models import CorpApiError, Corporation
 from japan_data_mcp.estat.client import EStatClient
+from japan_data_mcp.invoice.client import InvoiceClient
+from japan_data_mcp.invoice.models import InvoiceApiError, InvoiceIssuer
 from japan_data_mcp.estat.formatter import StatsFormatter, build_source_footer
 from japan_data_mcp.presets.population import fetch_population
 from japan_data_mcp.presets.regional import fetch_regional_profile
@@ -69,6 +71,17 @@ async def lifespan(server: FastMCP):  # noqa: ANN201
             logger.info("REALESTATE_API_KEY 未設定 — 不動産取引ツールは無効")
         server._realestate_client = re_client  # type: ignore[attr-defined]
 
+        # インボイスAPI（オプション、CORP_APP_ID を共用）
+        invoice_client: InvoiceClient | None = None
+        invoice_cm: InvoiceClient | None = None
+        if corp_client is not None:
+            try:
+                invoice_cm = InvoiceClient()
+                invoice_client = await invoice_cm.__aenter__()
+            except ValueError:
+                pass
+        server._invoice_client = invoice_client  # type: ignore[attr-defined]
+
         try:
             yield
         finally:
@@ -76,6 +89,8 @@ async def lifespan(server: FastMCP):  # noqa: ANN201
                 await corp_cm.__aexit__(None, None, None)
             if re_client and re_cm:
                 await re_cm.__aexit__(None, None, None)
+            if invoice_client and invoice_cm:
+                await invoice_cm.__aexit__(None, None, None)
 
 
 def _get_client(ctx: Context) -> EStatClient:
@@ -88,6 +103,10 @@ def _get_corp_client(ctx: Context) -> CorpClient | None:
 
 def _get_realestate_client(ctx: Context) -> RealEstateClient | None:
     return getattr(ctx.fastmcp, "_realestate_client", None)
+
+
+def _get_invoice_client(ctx: Context) -> InvoiceClient | None:
+    return getattr(ctx.fastmcp, "_invoice_client", None)
 
 
 # ------------------------------------------------------------------
@@ -111,6 +130,9 @@ mcp = FastMCP(
         "- search_corporations: 法人名で企業を検索\n"
         "- get_corporation: 法人番号で企業情報を取得\n"
         "- get_real_estate_transactions: 不動産取引価格情報を取得\n"
+        "- search_invoice_by_name: 会社名からインボイス登録番号を検索\n"
+        "- check_invoice_registration: 登録番号でインボイス登録状況を確認\n"
+        "- validate_invoice_on_date: 指定日時点でのインボイス登録有効性を確認\n"
         "- resolve_area: 地域名をコードに変換\n"
         "- list_available_stats: 利用可能な統計分野一覧\n"
         "- get_meta_info: 統計表の分類情報を取得\n\n"
@@ -576,6 +598,322 @@ async def get_real_estate_transactions(
         year=year,
         quarter=quarter,
     )
+
+
+# ------------------------------------------------------------------
+# インボイスツール
+# ------------------------------------------------------------------
+
+_INVOICE_NOT_CONFIGURED = (
+    "インボイスAPIが設定されていません。\n\n"
+    "利用するには環境変数 `CORP_APP_ID` にアプリケーションIDを設定してください。\n"
+    "取得方法: https://www.houjin-bangou.nta.go.jp/webapi/"
+)
+
+
+@mcp.tool()
+async def check_invoice_registration(
+    number: str,
+    ctx: Context,
+    history: bool = False,
+) -> str:
+    """適格請求書発行事業者の登録情報を登録番号で確認する.
+
+    インボイス制度に基づく適格請求書発行事業者の登録状況・
+    名称・所在地などを確認できる。
+
+    Args:
+        number: 登録番号（T+13桁の数字、例: "T1234567890123"）。
+                カンマ区切りで最大10件まで同時に検索可能。
+        history: 変更履歴を含めるか（デフォルト: False）
+
+    Returns:
+        登録事業者の情報（マークダウン）
+    """
+    invoice_client = _get_invoice_client(ctx)
+    if invoice_client is None:
+        return _INVOICE_NOT_CONFIGURED
+
+    numbers = [n.strip() for n in number.split(",") if n.strip()]
+    if not numbers:
+        return "登録番号を指定してください。"
+
+    for n in numbers:
+        if not _is_valid_invoice_number(n):
+            return (
+                f"登録番号 `{n}` の形式が不正です。\n"
+                "T + 13桁の数字で指定してください（例: T1234567890123）。"
+            )
+
+    await ctx.info(f"インボイス登録情報を確認中: {', '.join(numbers)}")
+
+    try:
+        issuers = await invoice_client.get_by_number(
+            numbers, history=history
+        )
+    except InvoiceApiError as e:
+        return f"インボイスAPI エラー: {e.message}"
+
+    if not issuers:
+        return (
+            f"登録番号 `{number}` に該当する"
+            "適格請求書発行事業者が見つかりませんでした。"
+        )
+
+    if len(issuers) == 1:
+        return _format_invoice_detail(issuers[0])
+    return _format_invoice_list(issuers)
+
+
+@mcp.tool()
+async def validate_invoice_on_date(
+    number: str,
+    day: str,
+    ctx: Context,
+) -> str:
+    """指定日時点での適格請求書発行事業者の登録有効性を確認する.
+
+    特定の取引日に事業者がインボイス発行資格を持っていたかを確認できる。
+
+    Args:
+        number: 登録番号（T+13桁の数字、例: "T1234567890123"）
+        day: 確認日（YYYY-MM-DD形式、例: "2024-12-01"）
+
+    Returns:
+        指定日時点の登録状態（マークダウン）
+    """
+    invoice_client = _get_invoice_client(ctx)
+    if invoice_client is None:
+        return _INVOICE_NOT_CONFIGURED
+
+    if not _is_valid_invoice_number(number):
+        return (
+            f"登録番号 `{number}` の形式が不正です。\n"
+            "T + 13桁の数字で指定してください（例: T1234567890123）。"
+        )
+
+    await ctx.info(f"インボイス有効性を確認中: {number}（{day}時点）")
+
+    try:
+        issuer = await invoice_client.validate_on_date(number, day)
+    except InvoiceApiError as e:
+        return f"インボイスAPI エラー: {e.message}"
+
+    if issuer is None:
+        return (
+            f"登録番号 `{number}` は {day} 時点で"
+            "適格請求書発行事業者として登録されていません。"
+        )
+
+    header = f"**{day} 時点の登録状態**\n\n"
+    return header + _format_invoice_detail(issuer)
+
+
+@mcp.tool()
+async def search_invoice_by_name(
+    name: str,
+    ctx: Context,
+    area: str | None = None,
+    limit: int = 5,
+) -> str:
+    """会社名からインボイス登録番号を検索する.
+
+    法人番号APIで会社名を検索し、該当法人のインボイス登録状況を
+    自動で確認する。法人番号 → 登録番号（T+法人番号）の変換を
+    内部で行うため、登録番号を知らなくても検索できる。
+
+    ※ 個人事業主は法人番号を持たないため、このツールでは検索できません。
+    個人事業主の場合は登録番号（T+13桁）を直接指定して
+    check_invoice_registration をご利用ください。
+
+    Args:
+        name: 検索キーワード（会社名、部分一致）
+        area: 地域名で絞り込み（都道府県名、例: "東京都"）
+        limit: 取得件数上限（デフォルト5、最大10）
+
+    Returns:
+        インボイス登録情報の一覧（マークダウン）
+    """
+    corp_client = _get_corp_client(ctx)
+    invoice_client = _get_invoice_client(ctx)
+    if corp_client is None or invoice_client is None:
+        return _INVOICE_NOT_CONFIGURED
+
+    await ctx.info(f"法人を検索中: {name}")
+
+    # 地域絞り込み
+    pref_code: str | None = None
+    if area:
+        try:
+            code = _resolve_single_area(area)
+        except AmbiguousAreaError as e:
+            return str(e)
+        pref_code = code[:2]
+
+    # Step 1: 法人番号APIで会社名検索
+    limit = min(limit, 10)  # インボイスAPIは最大10件同時検索
+    try:
+        corps = await corp_client.search_by_name(
+            name, prefecture_code=pref_code, limit=limit,
+        )
+    except CorpApiError as e:
+        return f"法人番号API エラー: {e.message}"
+
+    if not corps:
+        msg = f"「{name}」に該当する法人が見つかりませんでした。"
+        if area:
+            msg += f"（地域: {area}）"
+        msg += (
+            "\n\n※ 個人事業主のインボイス登録番号は名称検索に対応していません。"
+            "\n登録番号（T+13桁）を直接指定して"
+            " `check_invoice_registration` をご利用ください。"
+        )
+        return msg
+
+    # Step 2: 法人番号 → 登録番号に変換してインボイスAPI検索
+    invoice_numbers = [f"T{c.corporate_number}" for c in corps]
+    await ctx.info(
+        f"インボイス登録状況を確認中（{len(invoice_numbers)}件）"
+    )
+
+    try:
+        issuers = await invoice_client.get_by_number(invoice_numbers)
+    except InvoiceApiError as e:
+        return f"インボイスAPI エラー: {e.message}"
+
+    # 登録番号でルックアップ用マップ作成
+    issuer_map: dict[str, InvoiceIssuer] = {
+        iss.registrated_number: iss for iss in issuers
+    }
+
+    # Step 3: 結果を整形（法人情報 + インボイス登録状況）
+    lines: list[str] = [
+        f"## インボイス登録検索: 「{name}」（{len(corps)}件）\n"
+    ]
+
+    headers = ["法人名", "法人番号", "登録番号", "所在地", "インボイス登録"]
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("| " + " | ".join("---" for _ in headers) + " |")
+
+    for corp in corps:
+        inv_num = f"T{corp.corporate_number}"
+        iss = issuer_map.get(inv_num)
+        if iss:
+            status = iss.status_label
+        else:
+            status = "未登録"
+        row = [
+            corp.name,
+            f"`{corp.corporate_number}`",
+            f"`{inv_num}`",
+            f"{corp.prefecture_name}{corp.city_name}",
+            status,
+        ]
+        lines.append("| " + " | ".join(row) + " |")
+
+    lines.append("")
+    lines.append(
+        "> 詳細を確認するには `check_invoice_registration` に"
+        "登録番号を指定してください。"
+    )
+    lines.append("")
+    lines.append(
+        "※ 個人事業主は法人番号を持たないため、このツールでは検索できません。"
+        "個人事業主の場合は登録番号（T+13桁）を直接指定して"
+        " `check_invoice_registration` をご利用ください。"
+    )
+    lines.append(_build_invoice_search_footer())
+    return "\n".join(lines)
+
+
+def _is_valid_invoice_number(number: str) -> bool:
+    """登録番号の形式を検証する（T + 13桁）."""
+    return (
+        len(number) == 14
+        and number[0] == "T"
+        and number[1:].isdigit()
+    )
+
+
+def _format_invoice_detail(issuer: InvoiceIssuer) -> str:
+    """事業者の詳細情報をマークダウンに整形する."""
+    lines: list[str] = [f"## {issuer.name}\n"]
+    lines.append(f"- **登録番号**: `{issuer.registrated_number}`")
+    lines.append(f"- **区分**: {issuer.kind_label}")
+    lines.append(f"- **登録状態**: {issuer.status_label}")
+    lines.append(f"- **登録年月日**: {issuer.registration_date}")
+    if issuer.display_address:
+        lines.append(f"- **所在地**: {issuer.display_address}")
+    if issuer.kana:
+        lines.append(f"- **フリガナ**: {issuer.kana}")
+    if issuer.trade_name:
+        lines.append(f"- **屋号**: {issuer.trade_name}")
+    if issuer.process_label:
+        lines.append(f"- **処理区分**: {issuer.process_label}")
+    lines.append(f"- **更新年月日**: {issuer.update_date}")
+
+    lines.append(_build_invoice_footer(issuer))
+    return "\n".join(lines)
+
+
+def _format_invoice_list(issuers: list[InvoiceIssuer]) -> str:
+    """事業者リストをマークダウンテーブルに整形する."""
+    lines: list[str] = [
+        f"## インボイス登録情報（{len(issuers)}件）\n"
+    ]
+
+    headers = ["名称", "登録番号", "区分", "所在地", "登録状態"]
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("| " + " | ".join("---" for _ in headers) + " |")
+
+    for iss in issuers:
+        row = [
+            iss.name,
+            f"`{iss.registrated_number}`",
+            iss.kind_label,
+            iss.display_address or "-",
+            iss.status_label,
+        ]
+        lines.append("| " + " | ".join(row) + " |")
+
+    lines.append(_build_invoice_search_footer())
+    return "\n".join(lines)
+
+
+def _build_invoice_footer(issuer: InvoiceIssuer) -> str:
+    """インボイス詳細の検証フッターを生成する."""
+    now = datetime.now(_JST).strftime("%Y-%m-%d %H:%M JST")
+    lines: list[str] = ["", "---", "**データ検証情報**"]
+    lines.append("- 出典: 国税庁 適格請求書発行事業者公表サイト")
+    lines.append(
+        f"- 公表サイトで確認: {issuer.verification_url}"
+    )
+    lines.append(f"- 登録番号: {issuer.registrated_number}")
+    lines.append(f"- データ取得日時: {now}")
+    lines.append(
+        "- ⚠ 本データはインボイス公表サイト Web-API"
+        " から自動取得した値をそのまま表示しています。"
+        "正確性の最終確認は上記リンクから原本データをご参照ください。"
+    )
+    return "\n".join(lines)
+
+
+def _build_invoice_search_footer() -> str:
+    """インボイス検索の検証フッターを生成する."""
+    now = datetime.now(_JST).strftime("%Y-%m-%d %H:%M JST")
+    lines: list[str] = ["", "---", "**データ検証情報**"]
+    lines.append("- 出典: 国税庁 適格請求書発行事業者公表サイト")
+    lines.append(
+        "- 公表サイトで確認: "
+        "https://www.invoice-kohyo.nta.go.jp/"
+    )
+    lines.append(f"- データ取得日時: {now}")
+    lines.append(
+        "- ⚠ 本データはインボイス公表サイト Web-API"
+        " から自動取得した値をそのまま表示しています。"
+        "正確性の最終確認は上記リンクから原本データをご参照ください。"
+    )
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------------------

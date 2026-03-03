@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from japan_data_mcp.corp.models import Corporation, CorpApiError
+from japan_data_mcp.corp.models import CorpApiError, Corporation
 from japan_data_mcp.estat.models import (
     ClassItem,
     ClassObject,
@@ -13,6 +13,7 @@ from japan_data_mcp.estat.models import (
     StatsData,
     TableInfo,
 )
+from japan_data_mcp.invoice.models import InvoiceApiError, InvoiceIssuer
 from japan_data_mcp.realestate.models import RealEstateApiError, Transaction
 from japan_data_mcp.server import (
     _resolve_single_area,
@@ -99,6 +100,9 @@ class TestToolRegistration:
             "search_corporations",
             "get_corporation",
             "get_real_estate_transactions",
+            "check_invoice_registration",
+            "validate_invoice_on_date",
+            "search_invoice_by_name",
         }
         assert expected == tool_names
 
@@ -122,6 +126,7 @@ def _make_mock_ctx(
     *,
     corp_client: object | None = None,
     realestate_client: object | None = None,
+    invoice_client: object | None = None,
 ) -> MagicMock:
     """Context のモックを生成."""
     ctx = MagicMock()
@@ -129,6 +134,7 @@ def _make_mock_ctx(
     ctx.fastmcp._estat_client = client
     ctx.fastmcp._corp_client = corp_client
     ctx.fastmcp._realestate_client = realestate_client
+    ctx.fastmcp._invoice_client = invoice_client
     ctx.info = AsyncMock()
     return ctx
 
@@ -825,3 +831,167 @@ class TestGetRealEstateTransactions:
 
         call_args = mock_re_client.get_transactions.call_args
         assert call_args.kwargs.get("year") == 2023
+
+
+# ------------------------------------------------------------------
+# インボイスツールのテスト
+# ------------------------------------------------------------------
+
+
+def _sample_issuers() -> list[InvoiceIssuer]:
+    return [
+        InvoiceIssuer(
+            registrated_number="T2180001011843",
+            name="トヨタ自動車株式会社",
+            kind="2",
+            process="01",
+            registration_date="2023-10-01",
+            update_date="2023-09-15",
+            address="愛知県豊田市トヨタ町１番地",
+            address_prefecture_code="23",
+        ),
+    ]
+
+
+class TestCheckInvoiceRegistration:
+    async def test_returns_detail(self):
+        mock_invoice_client = MagicMock()
+        mock_invoice_client.get_by_number = AsyncMock(
+            return_value=_sample_issuers()
+        )
+        ctx = _make_mock_ctx(
+            MagicMock(), invoice_client=mock_invoice_client
+        )
+
+        from japan_data_mcp.server import check_invoice_registration
+
+        result = await check_invoice_registration("T2180001011843", ctx)
+
+        assert "トヨタ自動車株式会社" in result
+        assert "T2180001011843" in result
+        assert "登録中" in result
+        assert "データ検証情報" in result
+
+    async def test_not_found(self):
+        mock_invoice_client = MagicMock()
+        mock_invoice_client.get_by_number = AsyncMock(return_value=[])
+        ctx = _make_mock_ctx(
+            MagicMock(), invoice_client=mock_invoice_client
+        )
+
+        from japan_data_mcp.server import check_invoice_registration
+
+        result = await check_invoice_registration("T0000000000000", ctx)
+        assert "見つかりませんでした" in result
+
+    async def test_not_configured(self):
+        ctx = _make_mock_ctx(MagicMock(), invoice_client=None)
+
+        from japan_data_mcp.server import check_invoice_registration
+
+        result = await check_invoice_registration("T2180001011843", ctx)
+        assert "CORP_APP_ID" in result
+
+    async def test_invalid_number(self):
+        mock_invoice_client = MagicMock()
+        ctx = _make_mock_ctx(
+            MagicMock(), invoice_client=mock_invoice_client
+        )
+
+        from japan_data_mcp.server import check_invoice_registration
+
+        result = await check_invoice_registration("INVALID", ctx)
+        assert "形式が不正" in result
+
+
+class TestSearchInvoiceByName:
+    async def test_returns_combined_table(self):
+        mock_corp_client = MagicMock()
+        mock_corp_client.search_by_name = AsyncMock(
+            return_value=_sample_corporations()
+        )
+        mock_invoice_client = MagicMock()
+        mock_invoice_client.get_by_number = AsyncMock(
+            return_value=_sample_issuers()
+        )
+        ctx = _make_mock_ctx(
+            MagicMock(),
+            corp_client=mock_corp_client,
+            invoice_client=mock_invoice_client,
+        )
+
+        from japan_data_mcp.server import search_invoice_by_name
+
+        result = await search_invoice_by_name("トヨタ", ctx)
+
+        assert "トヨタ自動車株式会社" in result
+        assert "T2180001011843" in result
+        assert "登録中" in result
+        assert "データ検証情報" in result
+
+    async def test_corp_found_but_not_registered(self):
+        mock_corp_client = MagicMock()
+        mock_corp_client.search_by_name = AsyncMock(
+            return_value=_sample_corporations()
+        )
+        mock_invoice_client = MagicMock()
+        mock_invoice_client.get_by_number = AsyncMock(return_value=[])
+        ctx = _make_mock_ctx(
+            MagicMock(),
+            corp_client=mock_corp_client,
+            invoice_client=mock_invoice_client,
+        )
+
+        from japan_data_mcp.server import search_invoice_by_name
+
+        result = await search_invoice_by_name("トヨタ", ctx)
+
+        assert "トヨタ自動車株式会社" in result
+        assert "未登録" in result
+
+    async def test_no_corps_found(self):
+        mock_corp_client = MagicMock()
+        mock_corp_client.search_by_name = AsyncMock(return_value=[])
+        mock_invoice_client = MagicMock()
+        ctx = _make_mock_ctx(
+            MagicMock(),
+            corp_client=mock_corp_client,
+            invoice_client=mock_invoice_client,
+        )
+
+        from japan_data_mcp.server import search_invoice_by_name
+
+        result = await search_invoice_by_name("存在しない法人名", ctx)
+
+        assert "見つかりませんでした" in result
+        assert "個人事業主" in result
+
+    async def test_not_configured(self):
+        ctx = _make_mock_ctx(MagicMock(), corp_client=None, invoice_client=None)
+
+        from japan_data_mcp.server import search_invoice_by_name
+
+        result = await search_invoice_by_name("テスト", ctx)
+        assert "CORP_APP_ID" in result
+
+    async def test_area_filter(self):
+        mock_corp_client = MagicMock()
+        mock_corp_client.search_by_name = AsyncMock(
+            return_value=_sample_corporations()
+        )
+        mock_invoice_client = MagicMock()
+        mock_invoice_client.get_by_number = AsyncMock(
+            return_value=_sample_issuers()
+        )
+        ctx = _make_mock_ctx(
+            MagicMock(),
+            corp_client=mock_corp_client,
+            invoice_client=mock_invoice_client,
+        )
+
+        from japan_data_mcp.server import search_invoice_by_name
+
+        await search_invoice_by_name("トヨタ", ctx, area="愛知県")
+
+        call_kwargs = mock_corp_client.search_by_name.call_args
+        assert call_kwargs.kwargs.get("prefecture_code") == "23"

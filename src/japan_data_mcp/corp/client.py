@@ -99,7 +99,7 @@ class CorpClient:
             "target": target,
             "history": 0,
             "close": close,
-            "divide": min(limit, 2000),
+            "divide": 1,
         }
         if prefecture_code:
             params["prefecture"] = prefecture_code

@@ -245,6 +245,9 @@ class TestTextHelper:
 class TestCorpClientInit:
     def test_raises_without_app_id(self, monkeypatch):
         monkeypatch.delenv("CORP_APP_ID", raising=False)
+        monkeypatch.setattr(
+            "japan_data_mcp.corp.client.load_env_file", lambda: None
+        )
         with pytest.raises(ValueError, match="CORP_APP_ID"):
             CorpClient()
 
