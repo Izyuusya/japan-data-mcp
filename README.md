@@ -11,10 +11,10 @@
 日本の公的データにアクセスし、人間が読みやすい形式に自動変換して返します。
 
 <p align="center">
-  <img src="docs/demo-chat.gif" alt="japan-data-mcp デモ: Claude Desktopで「札幌市の人口を教えて」と聞くと、出典付きデータが返る" width="700">
+  <img src="https://raw.githubusercontent.com/Izyuusya/japan-data-mcp/main/docs/demo-chat.gif" alt="japan-data-mcp デモ: Claude Desktopで「札幌市の人口を教えて」と聞くと、出典付きデータが返る" width="700">
 </p>
 
-> **解説記事**: [e-Stat APIを100回叩いてわかった、政府データが宝の持ち腐れな件｜DATA POPCORN](https://datapopcorn.jp/estat-api-japan-data-mcp/)
+> **解説記事**: [e-Stat APIを100回叩いてわかった、政府データが宝の持ち腐れな件｜DATA POPCORN](https://datapopcorn.jp/japan-data-mcp/)
 
 ## 特徴
 
