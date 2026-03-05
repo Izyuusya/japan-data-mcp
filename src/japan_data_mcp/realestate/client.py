@@ -148,9 +148,10 @@ class RealEstateClient:
             raise RealEstateApiError(429, "リクエスト制限に達しました。")
         resp.raise_for_status()
 
-        # gzip 圧縮チェック
-        content_encoding = resp.headers.get("content-encoding", "")
-        if content_encoding == "gzip" or resp.content[:2] == b"\x1f\x8b":
+        # gzip 圧縮チェック（実際のバイト列で判定）
+        # httpx が自動展開済みの場合は content-encoding ヘッダーだけでは
+        # 判定できないため、マジックバイトを確認する
+        if resp.content[:2] == b"\x1f\x8b":
             text = gzip.decompress(resp.content).decode("utf-8")
             import json
 

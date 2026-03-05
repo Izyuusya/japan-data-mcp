@@ -185,6 +185,9 @@ class TestFormatTransactions:
 class TestRealEstateClientInit:
     def test_raises_without_api_key(self, monkeypatch):
         monkeypatch.delenv("REALESTATE_API_KEY", raising=False)
+        monkeypatch.setattr(
+            "japan_data_mcp.realestate.client.load_env_file", lambda: None
+        )
         with pytest.raises(ValueError, match="REALESTATE_API_KEY"):
             RealEstateClient()
 
