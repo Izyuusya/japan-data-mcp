@@ -22,9 +22,9 @@ from japan_data_mcp.invoice.models import InvoiceApiError, InvoiceIssuer
 from japan_data_mcp.estat.formatter import StatsFormatter, build_source_footer
 from japan_data_mcp.presets.population import fetch_population
 from japan_data_mcp.presets.regional import fetch_regional_profile
-from japan_data_mcp.realestate.client import RealEstateClient
-from japan_data_mcp.realestate.formatter import format_transactions
-from japan_data_mcp.realestate.models import RealEstateApiError
+from japan_data_mcp.realestate.client import RealEstateClient, current_year_jst
+from japan_data_mcp.realestate.formatter import format_land_prices, format_transactions
+from japan_data_mcp.realestate.models import LandPrice, RealEstateApiError
 from japan_data_mcp.utils.area_codes import (
     PREFECTURE_CODES,
     AmbiguousAreaError,
@@ -604,6 +604,130 @@ async def get_real_estate_transactions(
         area_name=area_name,
         year=year,
         quarter=quarter,
+    )
+
+
+@mcp.tool()
+async def get_land_price(
+    area: str,
+    ctx: Context,
+    year: int | None = None,
+    price_classification: str | None = None,
+    use_category: str | None = None,
+    zoom: int = 13,
+) -> str:
+    """地価公示・地価調査（標準地の価格）を取得する.
+
+    国土交通省の不動産情報ライブラリから、指定地域の「標準地」の
+    地価公示・地価調査データを取得する。取引事例（実際の売買価格）ではなく、
+    公示・調査による正常な価格（円/㎡）と、前年比・用途地域・最寄駅などの属性を返す。
+
+    Args:
+        area: 地域名（例: "佐倉市", "水戸市"）または地域コード（例: "12212"）
+        year: 対象年（例: 2026）。省略時は当年（公表前なら前年）を試みる
+        price_classification: "0"=国土交通省地価公示のみ, "1"=都道府県地価調査のみ,
+            None=両方
+        use_category: 用途区分コード（"00"=住宅地, "03"=宅地見込地, "05"=商業地,
+            "07"=準工業地, "09"=工業地, "10"=市街化調整区域内現況宅地,
+            "13"=市街地調整区域内現況林地, "20"=林地）。None=すべて
+        zoom: XYZタイルのズームレベル（13〜15、デフォルト13）。詳細に見たい場合は14〜15
+
+    Returns:
+        地価公示・地価調査データの一覧と価格サマリー（マークダウン）
+    """
+    re_client = _get_realestate_client(ctx)
+    if re_client is None:
+        return _REALESTATE_NOT_CONFIGURED
+
+    try:
+        area_code = _resolve_single_area(area)
+    except AmbiguousAreaError as e:
+        return str(e)
+
+    area_name = _get_area_display_name(area, area_code)
+    pref_code = area_code[:2]
+    # 都道府県コードの場合は市区町村を指定しない
+    city_code = area_code if not area_code.endswith("000") else None
+
+    await ctx.info(f"地価公示・地価調査を取得中: {area_name}")
+
+    result = await _fetch_land_prices_with_year_fallback(
+        re_client,
+        pref_code=pref_code,
+        city_code=city_code,
+        area_name=area_name,
+        area_query=area,
+        year=year,
+        price_classification=price_classification,
+        use_category=use_category,
+        zoom=zoom,
+    )
+    if isinstance(result, str):
+        return result
+    land_prices, used_year, saturated = result
+
+    return format_land_prices(
+        land_prices,
+        area_name=area_name,
+        year=used_year,
+        price_classification=price_classification,
+        use_category=use_category,
+        saturated=saturated,
+    )
+
+
+async def _fetch_land_prices_with_year_fallback(
+    re_client: RealEstateClient,
+    *,
+    pref_code: str,
+    city_code: str | None,
+    area_name: str,
+    area_query: str,
+    year: int | None,
+    price_classification: str | None,
+    use_category: str | None,
+    zoom: int,
+    max_years_back: int = 2,
+) -> tuple[list[LandPrice], int, bool] | str:
+    """地価を取得する。年未指定なら当年から遡ってデータのある年を探す.
+
+    地価公示は毎年3月下旬の公表で、当年分がまだ無い時期があるため、
+    データが空なら前年・前々年へフォールバックする。
+
+    Returns:
+        (地点リスト, 実際に使った年, 境界が取得できたか) またはエラーメッセージ
+    """
+    tried: list[int] = []
+    candidate_years = (
+        [year] if year is not None else list(range(current_year_jst(), current_year_jst() - max_years_back - 1, -1))
+    )
+    last_error: RealEstateApiError | None = None
+    for candidate in candidate_years:
+        try:
+            land_prices, saturated = await re_client.get_land_prices(
+                pref_code,
+                city_code=city_code,
+                year=candidate,
+                area_query=area_query,
+                zoom=zoom,
+                price_classification=price_classification,
+                use_category=use_category,
+            )
+        except RealEstateApiError as e:
+            last_error = e
+            break
+        except ValueError as e:
+            return f"地価データの取得条件が不正です: {e}"
+        tried.append(candidate)
+        if land_prices:
+            return land_prices, candidate, saturated
+    if last_error is not None:
+        return f"不動産情報ライブラリAPI エラー: {last_error.message}"
+    tried_label = "・".join(f"{y}年" for y in tried) or "指定年"
+    return (
+        f"## 地価公示・地価調査: {area_name}\n\n"
+        f"{tried_label}の地価データは見つかりませんでした。\n\n"
+        "> 年を明示するか、用途区分を変更してお試しください。"
     )
 
 
