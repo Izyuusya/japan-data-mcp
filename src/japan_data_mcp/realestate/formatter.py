@@ -5,7 +5,7 @@ from __future__ import annotations
 import statistics
 from datetime import datetime, timedelta, timezone
 
-from japan_data_mcp.realestate.models import Transaction
+from japan_data_mcp.realestate.models import LandPrice, Transaction
 
 _JST = timezone(timedelta(hours=9))
 
@@ -186,4 +186,179 @@ def _build_footer(
         "- ⚠ 本データは不動産情報ライブラリ API から自動取得した値をそのまま表示しています。"
         "正確性の最終確認は上記リンクから原本データをご参照ください。"
     )
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------
+# 地価公示・地価調査（XPT002）の整形
+# ------------------------------------------------------------------
+
+
+def format_land_prices(
+    land_prices: list[LandPrice],
+    *,
+    area_name: str | None = None,
+    year: int | None = None,
+    price_classification: str | None = None,
+    use_category: str | None = None,
+    saturated: bool = True,
+    limit: int = 50,
+) -> str:
+    """地価公示・地価調査の地点データをマークダウンレポートに整形する."""
+    if not land_prices:
+        return _no_land_price_message(area_name, year)
+
+    lines: list[str] = []
+    header = "## 地価公示・地価調査"
+    if area_name:
+        header += f": {area_name}"
+    lines.append(header)
+    lines.append(f"*全{len(land_prices)}地点*\n")
+
+    summary = _build_land_price_summary(land_prices)
+    if summary:
+        lines.append(summary)
+
+    lines.append(_build_land_price_table(land_prices, limit=limit))
+    if len(land_prices) > limit:
+        lines.append(f"\n*（価格上位{limit}地点を表示。全{len(land_prices)}地点）*")
+
+    lines.append(
+        _build_land_price_footer(
+            area_name=area_name,
+            year=year,
+            price_classification=price_classification,
+            use_category=use_category,
+            saturated=saturated,
+        )
+    )
+    return "\n".join(lines)
+
+
+def _no_land_price_message(area_name: str | None, year: int | None) -> str:
+    label = area_name or "指定地域"
+    suffix = f"（{year}年）" if year else ""
+    return (
+        f"## 地価公示・地価調査: {label}{suffix}\n\n"
+        f"{label} の地価データは見つかりませんでした。\n\n"
+        "> 年・地域・用途区分を変更してお試しください。"
+        "地価公示は毎年3月下旬に公表され、対象年（1月1日現在）のデータが取得できます。"
+    )
+
+
+def _build_land_price_summary(land_prices: list[LandPrice]) -> str:
+    """用途区分ごとの中央値・平均と、対前年変動率のサマリーを生成する."""
+    by_use: dict[str, list[int]] = {}
+    for lp in land_prices:
+        price = lp.price_int
+        if price is None or price <= 0:
+            continue
+        by_use.setdefault(lp.use_category_name_ja or "その他", []).append(price)
+
+    lines: list[str] = ["### 価格サマリー（円/㎡）"]
+    if by_use:
+        lines.append("| 用途区分 | 地点数 | 中央値 | 平均 | 最小 | 最大 |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for use, prices in sorted(
+            by_use.items(), key=lambda kv: -statistics.median(kv[1])
+        ):
+            lines.append(
+                f"| {use} | {len(prices)} | {int(statistics.median(prices)):,} "
+                f"| {int(statistics.mean(prices)):,} | {min(prices):,} "
+                f"| {max(prices):,} |"
+            )
+    else:
+        lines.append("- 価格を数値化できる地点がありませんでした。")
+
+    rates = [lp.yoy_rate_float for lp in land_prices]
+    rates = [r for r in rates if r is not None]
+    if rates:
+        up = sum(1 for r in rates if r > 0)
+        lines.append("")
+        lines.append(
+            f"- 対前年変動率: 平均 {statistics.mean(rates):+.1f}% "
+            f"/ 中央値 {statistics.median(rates):+.1f}% "
+            f"/ 上昇 {up}/{len(rates)} 地点"
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_land_price_table(land_prices: list[LandPrice], *, limit: int) -> str:
+    """価格の高い順に地点テーブルを生成する."""
+    ordered = sorted(
+        land_prices, key=lambda lp: (lp.price_int is None, -(lp.price_int or 0))
+    )[:limit]
+    headers = ["標準地番号", "用途", "価格", "前年比", "所在地", "最寄駅", "用途地域"]
+    lines = ["| " + " | ".join(headers) + " |"]
+    lines.append("| " + " | ".join("---" for _ in headers) + " |")
+    for lp in ordered:
+        yoy = lp.yoy_rate_float
+        yoy_display = f"{yoy:+.1f}%" if yoy is not None else "-"
+        location = f"{lp.place_name_ja}{lp.location_number_ja}" or "-"
+        station = lp.nearest_station_name_ja or "-"
+        distance = lp.u_road_distance_to_nearest_station_name_ja
+        if station != "-" and distance:
+            station = f"{station} {distance}"
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    lp.standard_lot_number_ja or "-",
+                    lp.use_category_name_ja or "-",
+                    lp.price_display,
+                    yoy_display,
+                    location,
+                    station,
+                    lp.regulations_use_category_name_ja or "-",
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines)
+
+
+def _build_land_price_footer(
+    *,
+    area_name: str | None = None,
+    year: int | None = None,
+    price_classification: str | None = None,
+    use_category: str | None = None,
+    saturated: bool = True,
+) -> str:
+    """地価データの検証用フッターを生成する."""
+    now = datetime.now(_JST).strftime("%Y-%m-%d %H:%M JST")
+    lines = ["", "---", "**データ検証情報**"]
+    lines.append("- 出典: 国土交通省 不動産情報ライブラリ（地価公示・地価調査）")
+    lines.append(
+        "- 不動産情報ライブラリで確認: https://www.reinfolib.mlit.go.jp/"
+    )
+    lines.append("- API: XPT002（地価公示・地価調査ポイントAPI）")
+
+    search_parts: list[str] = []
+    if area_name:
+        search_parts.append(area_name)
+    if year:
+        search_parts.append(f"{year}年")
+    if price_classification == "0":
+        search_parts.append("国土交通省地価公示のみ")
+    elif price_classification == "1":
+        search_parts.append("都道府県地価調査のみ")
+    if use_category:
+        search_parts.append(f"用途区分コード={use_category}")
+    if search_parts:
+        lines.append(f"- 検索条件: {' / '.join(search_parts)}")
+
+    if not saturated:
+        lines.append(
+            "- ⚠ 検索範囲の上限に達しても地点が増え続けたため、"
+            "市域の一部が欠落している可能性があります。"
+            "用途区分や年で絞るか、より狭い地域を指定してください。"
+        )
+    lines.append(
+        "- ⚠ 地価公示・地価調査は「標準地」の正常な価格であり、"
+        "実際の取引価格とは異なります（取引事例は get_real_estate_transactions を参照）。"
+    )
+    lines.append(f"- データ取得日時: {now}")
     return "\n".join(lines)

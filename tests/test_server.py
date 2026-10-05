@@ -100,6 +100,7 @@ class TestToolRegistration:
             "search_corporations",
             "get_corporation",
             "get_real_estate_transactions",
+            "get_land_price",
             "check_invoice_registration",
             "validate_invoice_on_date",
             "search_invoice_by_name",
